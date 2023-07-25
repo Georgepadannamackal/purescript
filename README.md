@@ -1,33 +1,62 @@
-<img src="logo.png" alt="PureScript" width="392">
+# PureScript npm package
 
-A small strongly typed programming language with expressive types that compiles to JavaScript, written in and inspired by Haskell.
+[![npm version](http://img.shields.io/npm/v/purescript.svg)](https://www.npmjs.com/package/purescript)
+[![Build Status](https://travis-ci.org/purescript-contrib/node-purescript.svg?branch=master)](https://travis-ci.org/purescript-contrib/node-purescript)
 
-[![Hackage](https://img.shields.io/hackage/v/purescript.svg)](http://hackage.haskell.org/package/purescript) [![Build Status](https://github.com/purescript/purescript/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/purescript/purescript/actions/workflows/ci.yml)
+[PureScript](https://github.com/purescript/purescript) binary wrapper that makes it seamlessly available via [npm](https://www.npmjs.com/)
 
-## Language info
+## Prerequisites
 
-- [PureScript home](http://purescript.org)
-- [Releases & changelog](https://github.com/purescript/purescript/releases)
-- [Contributing to PureScript](https://github.com/purescript/purescript/blob/master/CONTRIBUTING.md)
+This package makes maximum use of `postinstall` [script](https://docs.npmjs.com/misc/scripts), so please make sure that [`ignore-scripts` npm-config](https://docs.npmjs.com/misc/config#ignore-scripts) is not enabled before installation.
 
-## Resources
+```console
+$ npm config get ignore-scripts
+false
+```
 
-- [PureScript book](https://book.purescript.org/)
-- [Documentation](https://github.com/purescript/documentation)
-- [Try PureScript](http://try.purescript.org)
-- [Pursuit Package Index](http://pursuit.purescript.org/)
+## Installation
 
-## Help!
+[Use](https://docs.npmjs.com/cli/install) [npm](https://docs.npmjs.com/about-npm/).
 
-### Community Spaces
+```
+npm install purescript
+```
 
-The following spaces are governed by the [PureScript Community Code of Conduct](https://github.com/purescript/governance/blob/master/CODE_OF_CONDUCT.md). The majority of PureScript users use these spaces to discuss and collaborate on PureScript-related topics:
-- [PureScript Discord](https://purescript.org/chat)
-- [PureScript Discourse](https://discourse.purescript.org/)
+Once the command above is executed,
 
-### Unaffiliated Spaces
+__1.__ First, it checks if a PureScript binary has been already cached, and restores that if available.
 
-Some PureScript users also collaborate in the below spaces. These do not fall under the code of conduct linked above. They may have no code of conduct or one very different than the one linked above.
-- [PureScript Matrix](https://matrix.to/#/#purescript:matrix.org)
-- [PureScript on StackOverflow](http://stackoverflow.com/questions/tagged/purescript)
-- [The `#purescript` channel on Libera.Chat](https://libera.chat/)
+__2.__ The second plan: if no cache is available, it downloads a prebuilt binary from [the PureScript release page](https://github.com/purescript/purescript/releases).
+
+__3.__ The last resort: if no prebuilt binary is provided for your platform or the downloaded binary doesn't work correctly, it downloads [the PureScript source code](https://github.com/purescript/purescript/tree/master) and compile it with [Stack](https://docs.haskellstack.org/).
+
+## API
+
+### `require('purescript')`
+
+Type: `string`
+
+An absolute path to the installed PureScript binary, which can be used with [`child_process`](https://nodejs.org/api/child_process.html) functions.
+
+```javascript
+const {execFile} = require('child_process');
+const purs = require('purescript'); //=> '/Users/you/example/node_modules/purescript/purs.bin'
+
+execFile(purs, ['compile', 'input.purs', '--output', 'output.purs'], () => {
+  console.log('Compiled.');
+});
+```
+
+## CLI
+
+You can use it via CLI by installing it [globally](https://docs.npmjs.com/files/folders#global-installation).
+
+```
+npm install --global purescript
+
+purs --help
+```
+
+## License
+
+[ISC License](./LICENSE) © 2017 - 2019 Watanabe Shinnosuke
