@@ -88,9 +88,9 @@ moduleToJs (Module _ coms mn _ imps exps reExps foreigns decls) foreignInclude =
   -- us remove any unreferenced top-level declarations. To achieve this, we wrap any non-trivial
   -- top-level values in an IIFE marked with a pure annotation.
   annotatePure :: AST -> AST
-  annotatePure = annotateOrWrap
+  annotatePure = annotateOrWrap Nothing
     where
-    annotateOrWrap = liftA2 fromMaybe pureIife maybePure
+    annotateOrWrap nm = liftA2 fromMaybe (pureIife nm) maybePure
 
     -- If the JS is potentially effectful (in the eyes of a bundler that
     -- doesn't know about PureScript), return Nothing. Otherwise, return Just
@@ -108,7 +108,7 @@ moduleToJs (Module _ coms mn _ imps exps reExps foreigns decls) foreignInclude =
     maybePure' = maybePureGen True
 
     maybePureGen alreadyAnnotated = \case
-      AST.VariableIntroduction ss name j -> Just (AST.VariableIntroduction ss name (fmap annotateOrWrap <$> j))
+      AST.VariableIntroduction ss name j -> Just (AST.VariableIntroduction ss name (fmap (annotateOrWrap (Just (name <> "1"))) <$> j))
       AST.App ss f args -> (if alreadyAnnotated then AST.App else pureApp) ss <$> maybePure' f <*> traverse maybePure args
       AST.ArrayLiteral ss jss -> AST.ArrayLiteral ss <$> traverse maybePure jss
       AST.ObjectLiteral ss props -> AST.ObjectLiteral ss <$> traverse (traverse maybePure) props
@@ -125,8 +125,8 @@ moduleToJs (Module _ coms mn _ imps exps reExps foreigns decls) foreignInclude =
 
       _ -> Nothing
 
-    pureIife :: AST -> AST
-    pureIife val = pureApp Nothing (AST.Function Nothing Nothing [] (AST.Block Nothing [AST.Return Nothing val])) []
+    pureIife :: Maybe Text -> AST -> AST
+    pureIife nm val = pureApp Nothing (AST.Function Nothing nm [] (AST.Block Nothing [AST.Return Nothing val])) []
 
     pureApp :: Maybe SourceSpan -> AST -> [AST] -> AST
     pureApp ss f = AST.Comment AST.PureAnnotation . AST.App ss f
@@ -209,10 +209,10 @@ moduleToJs (Module _ coms mn _ imps exps reExps foreigns decls) foreignInclude =
 
   runtimeLazy :: AST
   runtimeLazy =
-    AST.VariableIntroduction Nothing "$runtime_lazy" . Just . (UnknownEffects, ) . AST.Function Nothing Nothing ["name", "moduleName", "init"] . AST.Block Nothing $
+    AST.VariableIntroduction Nothing "$runtime_lazy" . Just . (UnknownEffects, ) . AST.Function Nothing (Just "runTimeLazy1") ["name", "moduleName", "init"] . AST.Block Nothing $
       [ AST.VariableIntroduction Nothing "state" . Just . (UnknownEffects, ) . AST.NumericLiteral Nothing $ Left 0
       , AST.VariableIntroduction Nothing "val" Nothing
-      , AST.Return Nothing . AST.Function Nothing Nothing ["lineNumber"] . AST.Block Nothing $
+      , AST.Return Nothing . AST.Function Nothing (Just "runTimeLazy2") ["lineNumber"] . AST.Block Nothing $
         [ AST.IfElse Nothing (AST.Binary Nothing AST.EqualTo (AST.Var Nothing "state") (AST.NumericLiteral Nothing (Left 2))) (AST.Return Nothing $ AST.Var Nothing "val") Nothing
         , AST.IfElse Nothing (AST.Binary Nothing AST.EqualTo (AST.Var Nothing "state") (AST.NumericLiteral Nothing (Left 1))) (AST.Throw Nothing $ AST.Unary Nothing AST.New (AST.App Nothing (AST.Var Nothing "ReferenceError") [foldl1 (AST.Binary Nothing AST.Add)
           [ AST.Var Nothing "name"
@@ -258,8 +258,9 @@ moduleBindToJs mn = bindToJs
        then nonRecToJS a i (modifyAnn removeComments e)
        else AST.Comment (AST.SourceComments com) <$> nonRecToJS a i (modifyAnn removeComments e)
   nonRecToJS (ss, _, _, _) ident val = do
-    js <- valueToJs val
-    withPos ss $ AST.VariableIntroduction Nothing (identToJs ident) (Just (guessEffects val, js))
+    let name = (identToJs ident)
+    js <- valueToJs (name <> "1") val
+    withPos ss $ AST.VariableIntroduction Nothing name (Just (guessEffects val, js))
 
   guessEffects :: Expr Ann -> AST.InitializerEffects
   guessEffects = \case
@@ -280,91 +281,91 @@ moduleBindToJs mn = bindToJs
   var = AST.Var Nothing . identToJs
 
   -- Generate code in the simplified JavaScript intermediate representation for a value or expression.
-  valueToJs :: Expr Ann -> m AST
-  valueToJs e =
+  valueToJs :: Text -> Expr Ann -> m AST
+  valueToJs fnName e =
     let (ss, _, _, _) = extractAnn e in
-    withPos ss =<< valueToJs' e
+    withPos ss =<< valueToJs' (fnName <> "1") e
 
-  valueToJs' :: Expr Ann -> m AST
-  valueToJs' (Literal (pos, _, _, _) l) =
-    rethrowWithPosition pos $ literalToValueJS pos l
-  valueToJs' (Var (_, _, _, Just (IsConstructor _ [])) name) =
+  valueToJs' :: Text -> Expr Ann -> m AST
+  valueToJs' fnName (Literal (pos, _, _, _) l) =
+    rethrowWithPosition pos $ literalToValueJS fnName pos l
+  valueToJs' _ (Var (_, _, _, Just (IsConstructor _ [])) name) =
     return $ accessorString "value" $ qualifiedToJS id name
-  valueToJs' (Var (_, _, _, Just (IsConstructor _ _)) name) =
+  valueToJs' _ (Var (_, _, _, Just (IsConstructor _ _)) name) =
     return $ accessorString "create" $ qualifiedToJS id name
-  valueToJs' (Accessor _ prop val) =
-    accessorString prop <$> valueToJs val
-  valueToJs' (ObjectUpdate _ o ps) = do
-    obj <- valueToJs o
-    sts <- mapM (sndM valueToJs) ps
-    extendObj obj sts
-  valueToJs' (Abs _ arg val) = do
-    ret <- valueToJs val
+  valueToJs' fnName (Accessor _ prop val) =
+    accessorString prop <$> (valueToJs (fnName <> "1")) val
+  valueToJs' fnName (ObjectUpdate _ o ps) = do
+    obj <- valueToJs (fnName <> "1") o
+    sts <- mapM (sndM (valueToJs (fnName <> "1"))) ps
+    extendObj fnName obj sts
+  valueToJs' fnName (Abs _ arg val) = do
+    ret <- valueToJs (fnName <> "1") val
     let jsArg = case arg of
                   UnusedIdent -> []
                   _           -> [identToJs arg]
-    return $ AST.Function Nothing Nothing jsArg (AST.Block Nothing [AST.Return Nothing ret])
-  valueToJs' e@App{} = do
+    return $ AST.Function Nothing (Just fnName) jsArg (AST.Block Nothing [AST.Return Nothing ret])
+  valueToJs' fnName e@App{} = do
     let (f, args) = unApp e []
-    args' <- mapM valueToJs args
+    args' <- mapM (valueToJs (fnName <> "1")) args
     case f of
       Var (_, _, _, Just IsNewtype) _ -> return (head args')
       Var (_, _, _, Just (IsConstructor _ fields)) name | length args == length fields ->
         return $ AST.Unary Nothing AST.New $ AST.App Nothing (qualifiedToJS id name) args'
-      _ -> flip (foldl (\fn a -> AST.App Nothing fn [a])) args' <$> valueToJs f
+      _ -> flip (foldl (\fn a -> AST.App Nothing fn [a])) args' <$> (valueToJs (fnName <> "1")) f
     where
     unApp :: Expr Ann -> [Expr Ann] -> (Expr Ann, [Expr Ann])
     unApp (App _ val arg) args = unApp val (arg : args)
     unApp other args = (other, args)
-  valueToJs' (Var (_, _, _, Just IsForeign) qi@(Qualified (ByModuleName mn') ident)) =
+  valueToJs' _ (Var (_, _, _, Just IsForeign) qi@(Qualified (ByModuleName mn') ident)) =
     return $ if mn' == mn
              then foreignIdent ident
              else varToJs qi
-  valueToJs' (Var (_, _, _, Just IsForeign) ident) =
+  valueToJs' _ (Var (_, _, _, Just IsForeign) ident) =
     internalError $ "Encountered an unqualified reference to a foreign ident " ++ T.unpack (showQualified showIdent ident)
-  valueToJs' (Var _ ident) = return $ varToJs ident
-  valueToJs' (Case (ss, _, _, _) values binders) = do
-    vals <- mapM valueToJs values
-    bindersToJs ss binders vals
-  valueToJs' (Let _ ds val) = do
+  valueToJs' _ (Var _ ident) = return $ varToJs ident
+  valueToJs' fnName (Case (ss, _, _, _) values binders) = do
+    vals <- mapM (valueToJs (fnName <> "1")) values
+    bindersToJs (fnName <> "1" ) ss binders vals
+  valueToJs' fnName (Let _ ds val) = do
     ds' <- concat <$> mapM bindToJs ds
-    ret <- valueToJs val
-    return $ AST.App Nothing (AST.Function Nothing Nothing [] (AST.Block Nothing (ds' ++ [AST.Return Nothing ret]))) []
-  valueToJs' (Constructor (_, _, _, Just IsNewtype) _ ctor _) =
+    ret <- valueToJs (fnName <> "1") val
+    return $ AST.App Nothing (AST.Function Nothing (Just fnName) [] (AST.Block Nothing (ds' ++ [AST.Return Nothing ret]))) []
+  valueToJs' fnName (Constructor (_, _, _, Just IsNewtype) _ ctor _) =
     return $ AST.VariableIntroduction Nothing (properToJs ctor) (Just . (UnknownEffects, ) $
                 AST.ObjectLiteral Nothing [("create",
-                  AST.Function Nothing Nothing ["value"]
+                  AST.Function Nothing (Just fnName) ["value"]
                     (AST.Block Nothing [AST.Return Nothing $ AST.Var Nothing "value"]))])
-  valueToJs' (Constructor _ _ ctor []) =
-    return $ iife (properToJs ctor) [ AST.Function Nothing (Just (properToJs ctor)) [] (AST.Block Nothing [])
+  valueToJs' fnName (Constructor _ _ ctor []) =
+    return $ iife (fnName <> "1") (properToJs ctor) [ AST.Function Nothing (Just (properToJs ctor)) [] (AST.Block Nothing [])
            , AST.Assignment Nothing (accessorString "value" (AST.Var Nothing (properToJs ctor)))
                 (AST.Unary Nothing AST.New $ AST.App Nothing (AST.Var Nothing (properToJs ctor)) []) ]
-  valueToJs' (Constructor _ _ ctor fields) =
+  valueToJs' fnName (Constructor _ _ ctor fields) =
     let constructor =
           let body = [ AST.Assignment Nothing ((accessorString $ mkString $ identToJs f) (AST.Var Nothing "this")) (var f) | f <- fields ]
           in AST.Function Nothing (Just (properToJs ctor)) (identToJs `map` fields) (AST.Block Nothing body)
         createFn =
           let body = AST.Unary Nothing AST.New $ AST.App Nothing (AST.Var Nothing (properToJs ctor)) (var `map` fields)
-          in foldr (\f inner -> AST.Function Nothing Nothing [identToJs f] (AST.Block Nothing [AST.Return Nothing inner])) body fields
-    in return $ iife (properToJs ctor) [ constructor
+          in foldr (\f inner -> AST.Function Nothing (Just fnName) [identToJs f] (AST.Block Nothing [AST.Return Nothing inner])) body fields
+    in return $ iife (fnName <> "1") (properToJs ctor) [ constructor
                           , AST.Assignment Nothing (accessorString "create" (AST.Var Nothing (properToJs ctor))) createFn
                           ]
 
-  iife :: Text -> [AST] -> AST
-  iife v exprs = AST.App Nothing (AST.Function Nothing Nothing [] (AST.Block Nothing $ exprs ++ [AST.Return Nothing $ AST.Var Nothing v])) []
+  iife :: Text -> Text -> [AST] -> AST
+  iife fnName v exprs = AST.App Nothing (AST.Function Nothing (Just fnName) [] (AST.Block Nothing $ exprs ++ [AST.Return Nothing $ AST.Var Nothing v])) []
 
-  literalToValueJS :: SourceSpan -> Literal (Expr Ann) -> m AST
-  literalToValueJS ss (NumericLiteral (Left i)) = return $ AST.NumericLiteral (Just ss) (Left i)
-  literalToValueJS ss (NumericLiteral (Right n)) = return $ AST.NumericLiteral (Just ss) (Right n)
-  literalToValueJS ss (StringLiteral s) = return $ AST.StringLiteral (Just ss) s
-  literalToValueJS ss (CharLiteral c) = return $ AST.StringLiteral (Just ss) (fromString [c])
-  literalToValueJS ss (BooleanLiteral b) = return $ AST.BooleanLiteral (Just ss) b
-  literalToValueJS ss (ArrayLiteral xs) = AST.ArrayLiteral (Just ss) <$> mapM valueToJs xs
-  literalToValueJS ss (ObjectLiteral ps) = AST.ObjectLiteral (Just ss) <$> mapM (sndM valueToJs) ps
+  literalToValueJS :: Text -> SourceSpan -> Literal (Expr Ann) -> m AST
+  literalToValueJS _ ss (NumericLiteral (Left i)) = return $ AST.NumericLiteral (Just ss) (Left i)
+  literalToValueJS _ ss (NumericLiteral (Right n)) = return $ AST.NumericLiteral (Just ss) (Right n)
+  literalToValueJS _ ss (StringLiteral s) = return $ AST.StringLiteral (Just ss) s
+  literalToValueJS _ ss (CharLiteral c) = return $ AST.StringLiteral (Just ss) (fromString [c])
+  literalToValueJS _ ss (BooleanLiteral b) = return $ AST.BooleanLiteral (Just ss) b
+  literalToValueJS fnName ss (ArrayLiteral xs) = AST.ArrayLiteral (Just ss) <$> mapM (valueToJs (fnName <> "1")) xs
+  literalToValueJS fnName ss (ObjectLiteral ps) = AST.ObjectLiteral (Just ss) <$> mapM (sndM (valueToJs ((fnName <> "1")))) ps
 
   -- Shallow copy an object.
-  extendObj :: AST -> [(PSString, AST)] -> m AST
-  extendObj obj sts = do
+  extendObj :: Text -> AST -> [(PSString, AST)] -> m AST
+  extendObj fnName obj sts = do
     newObj <- freshName
     key <- freshName
     evaluatedObj <- freshName
@@ -380,7 +381,7 @@ moduleBindToJs mn = bindToJs
       assign = AST.Block Nothing [AST.Assignment Nothing (AST.Indexer Nothing jsKey jsNewObj) (AST.Indexer Nothing jsKey jsEvaluatedObj)]
       stToAssign (s, js) = AST.Assignment Nothing (accessorString s jsNewObj) js
       extend = map stToAssign sts
-    return $ AST.App Nothing (AST.Function Nothing Nothing [] block) []
+    return $ AST.App Nothing (AST.Function Nothing (Just fnName) [] block) []
 
   -- Generate code in the simplified JavaScript intermediate representation for a reference to a
   -- variable.
@@ -400,14 +401,14 @@ moduleBindToJs mn = bindToJs
 
   -- Generate code in the simplified JavaScript intermediate representation for pattern match binders
   -- and guards.
-  bindersToJs :: SourceSpan -> [CaseAlternative Ann] -> [AST] -> m AST
-  bindersToJs ss binders vals = do
+  bindersToJs :: Text -> SourceSpan -> [CaseAlternative Ann] -> [AST] -> m AST
+  bindersToJs fnName ss binders vals = do
     valNames <- replicateM (length vals) freshName
     let assignments = zipWith (AST.VariableIntroduction Nothing) valNames (map (Just . (UnknownEffects, )) vals)
     jss <- forM binders $ \(CaseAlternative bs result) -> do
       ret <- guardsToJs result
       go valNames ret bs
-    return $ AST.App Nothing (AST.Function Nothing Nothing [] (AST.Block Nothing (assignments ++ concat jss ++ [AST.Throw Nothing $ failedPatternError valNames])))
+    return $ AST.App Nothing (AST.Function Nothing (Just fnName) [] (AST.Block Nothing (assignments ++ concat jss ++ [AST.Throw Nothing $ failedPatternError valNames])))
                    []
     where
       go :: [Text] -> [AST] -> [Binder Ann] -> m [AST]
@@ -432,13 +433,13 @@ moduleBindToJs mn = bindToJs
       guardsToJs :: Either [(Guard Ann, Expr Ann)] (Expr Ann) -> m [AST]
       guardsToJs (Left gs) = traverse genGuard gs where
         genGuard (cond, val) = do
-          cond' <- valueToJs cond
-          val'   <- valueToJs val
+          cond' <- (valueToJs (fnName <> "1") ) cond
+          val'   <- (valueToJs (fnName <> "1") ) val
           return
             (AST.IfElse Nothing cond'
               (AST.Block Nothing [AST.Return Nothing val']) Nothing)
 
-      guardsToJs (Right v) = return . AST.Return Nothing <$> valueToJs v
+      guardsToJs (Right v) = return . AST.Return Nothing <$> (valueToJs (fnName <> "1") ) v
 
   binderToJs :: Text -> [AST] -> Binder Ann -> m [AST]
   binderToJs s done binder =
